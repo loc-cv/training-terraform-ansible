@@ -1,0 +1,23 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+Vagrant.configure("2") do |config|
+  # Forward ssh-agent for cloning from Github.com
+  config.ssh.forward_agent = true
+
+  # Disable updating guest additions
+  config.vbguest.auto_update = false if Vagrant.has_plugin?("vagrant-vbguest")
+
+  # Disable guest additions
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+
+  config.vm.define "backend" do |backend|
+    backend.vm.box = "ubuntu/focal64"
+    backend.vm.hostname = "devblog-backend"
+    backend.vm.network "forwarded_port", guest: 80, host: 8080
+    backend.vm.network "forwarded_port", guest: 443, host: 8443
+    backend.vm.provider "virtualbox" do |virtualbox|
+      virtualbox.name = "devblog_backend"
+    end
+  end
+end

@@ -1,0 +1,148 @@
+---
+- name: Deploy Node.js application
+  # hosts: web_servers
+  hosts: vagrant
+  become: true
+
+  vars:
+    proj_app: "devblog_server"
+    proj_name: "{{ proj_app }}"
+    proj_path: "{{ ansible_env.HOME }}/devblog/{{ proj_name }}"
+    proj_port: 8000
+    repo_url: git@github.com:loc-cv/devblog-server.git
+    nodejs_version: 18
+    github_ssh_private_key_file: "{{ ansible_env.HOME }}/.ssh/id_ed25519"
+
+  vars_files:
+    - secrets.yml
+
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install Node.js dependencies
+      ansible.builtin.apt:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - curl
+        - software-properties-common
+
+    - name: Install the gpg key for nodejs LTS
+      ansible.builtin.apt_key:
+        url: "https://deb.nodesource.com/gpgkey/nodesource.gpg.key"
+        state: present
+
+    - name: Add NodeSource repository
+      ansible.builtin.apt_repository:
+        repo: "deb https://deb.nodesource.com/node_{{ nodejs_version }}.x {{ ansible_distribution_release }} main"
+        state: present
+        update_cache: true
+        filename: nodesource
+
+    - name: Install Node.js
+      ansible.builtin.apt:
+        name: nodejs
+        state: present
+
+    - name: Install pnpm
+      community.general.npm:
+        name: pnpm
+        global: true
+        state: latest
+
+    - name: Install build-essential
+      ansible.builtin.apt:
+        name: build-essential
+        state: present
+
+    - name: Install git
+      ansible.builtin.apt:
+        name: git
+        state: present
+
+    - name: Install nginx
+      ansible.builtin.apt:
+        name: nginx
+        state: present
+
+    - name: Create project path
+      ansible.builtin.file:
+        path: "{{ proj_path }}"
+        state: directory
+        mode: "0755"
+
+    - name: Copy Github private key file
+      ansible.builtin.copy:
+        src: ~/.ssh/id_ed25519
+        dest: "{{ github_ssh_private_key_file }}"
+        mode: "0400"
+
+    - name: Check out the repository on the host
+      ansible.builtin.git:
+        repo: "{{ repo_url }}"
+        dest: "{{ proj_path }}"
+        version: main
+        accept_hostkey: true
+        update: true
+        force: true
+        key_file: "{{ github_ssh_private_key_file }}"
+
+    - name: Set project .env file
+      ansible.builtin.template:
+        src: templates/env.j2
+        dest: "{{ proj_path }}/.env"
+        mode: "0755"
+
+    - name: Install project packages based on package.json
+      community.general.pnpm:
+        path: "{{ proj_path }}"
+        production: false
+
+    - name: Install Forever
+      community.general.npm:
+        name: forever
+        global: true
+        state: present
+
+    - name: Build the project
+      ansible.builtin.command:
+        chdir: "{{ proj_path }}"
+        cmd: "pnpm run build"
+      changed_when: true
+
+    - name: Start the application
+      ansible.builtin.command:
+        chdir: "{{ proj_path }}"
+        cmd: "forever start dist/src/server.js"
+      changed_when: true
+
+    - name: Remove the default nginx config file
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: Restart nginx
+
+    - name: Set the nginx config file
+      ansible.builtin.template:
+        src: templates/nginx.conf.j2
+        dest: "/etc/nginx/sites-available/{{ proj_name }}.conf"
+        mode: "0640"
+      notify: Restart nginx
+
+    - name: Enable the nginx config file
+      ansible.builtin.file:
+        src: "/etc/nginx/sites-available/{{ proj_name }}.conf"
+        dest: "/etc/nginx/sites-enabled/{{ proj_name }}.conf"
+        state: link
+        mode: "0777"
+      notify: Restart nginx
+
+  handlers:
+    - name: Restart nginx
+      ansible.builtin.service:
+        name: nginx
+        state: restarted
+...
